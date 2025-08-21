@@ -1,0 +1,9 @@
+# Ignorar a pasta de downloads temporários
+temp_downloads/
+
+# Ignorar arquivos de ambiente virtual do Python
+venv/
+*.pyc
+
+# ignore-o por segurança
+cookies.txt
