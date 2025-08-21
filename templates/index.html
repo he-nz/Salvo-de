@@ -3,14 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>Downloader Web</title>
-  <!-- Para Flask -->
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <div class="container">
     <h1>Salvo-De</h1>
     
-    <!-- FORMULÁRIO -->
     <form id="downloadForm">
       <label>URL:</label>
       <input type="text" name="url" placeholder="Cole o link aqui..." required>
@@ -35,27 +33,6 @@
     <div id="link"></div>
   </div>
 
-  <script>
-    document.getElementById("downloadForm").onsubmit = async function(e){
-      e.preventDefault();
-      const formData = new FormData(this);
-      document.getElementById("status").innerText = "Baixando...";
-
-      try {
-        let resp = await fetch("/download", { method:"POST", body:formData });
-        let result = await resp.json();
-
-        if(result.status === "ok"){
-          document.getElementById("status").innerText = result.message;
-          document.getElementById("link").innerHTML =
-            `<a href="/getfile?file=${encodeURIComponent(result.file)}">Clique aqui para baixar o arquivo</a>`;
-        } else {
-          document.getElementById("status").innerText = "Erro: " + result.message;
-        }
-      } catch (err) {
-        document.getElementById("status").innerText = "Erro de conexão.";
-      }
-    }
   <script>
     const statusDiv = document.getElementById("status");
     const linkDiv = document.getElementById("link");
@@ -111,4 +88,3 @@
   </script>
 </body>
 </html>
-
