@@ -1,19 +1,60 @@
-# app.py (versão modificada)
+# app.py (versão final com threading)
 import os
+import threading
+import secrets
 from flask import Flask, render_template, request, jsonify, send_file
-from redis import Redis
-from rq import Queue
 from pathlib import Path
+from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
 
-# Conexão com a fila Redis
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-conn = Redis.from_url(redis_url)
-q = Queue(connection=conn)
-
-# Diretório de downloads (deve ser o mesmo do worker.py)
 DOWNLOAD_DIR = Path("temp_downloads")
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Dicionário para rastrear o status e o resultado dos jobs
+jobs = {}
+
+def perform_download_threaded(url, fmt, quality, job_id):
+    """
+    Esta função será executada em uma thread separada.
+    Ela executa o download e atualiza o status no dicionário 'jobs'.
+    """
+    try:
+        jobs[job_id]['status'] = 'processing'
+        
+        outtmpl = str(DOWNLOAD_DIR / '%(title)s - %(id)s.%(ext)s') # Adiciona ID para evitar nomes duplicados
+
+        common_opts = {
+            'outtmpl': outtmpl,
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        if fmt == "audio":
+            opts = {**common_opts, 'format': 'bestaudio/best', 'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]}
+        else:
+            video_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            opts = {**common_opts, 'format': video_format, 'merge_output_format': 'mp4'}
+
+        COOKIES_FILE = Path("cookies.txt")
+        if COOKIES_FILE.exists():
+            opts["cookiefile"] = str(COOKIES_FILE)
+
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            if fmt == "audio":
+                filename = os.path.splitext(filename)[0] + ".mp3"
+        
+        # Armazena o nome do arquivo no sucesso
+        jobs[job_id]['status'] = 'finished'
+        jobs[job_id]['filename'] = os.path.basename(filename)
+
+    except Exception as e:
+        print(f"Erro no Job {job_id}: {e}")
+        jobs[job_id]['status'] = 'failed'
+        jobs[job_id]['error'] = str(e)
+
 
 @app.route("/")
 def index():
@@ -21,7 +62,6 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def download():
-    """Esta função agora apenas adiciona uma tarefa à fila."""
     url = request.form.get("url")
     fmt = request.form.get("format", "video")
     quality = request.form.get("quality", "best")
@@ -29,48 +69,32 @@ def download():
     if not url:
         return jsonify({"status": "erro", "message": "Nenhuma URL recebida."})
 
-    # Adiciona a tarefa de download à fila
-    # A string 'worker.perform_download' diz ao RQ para executar a função 'perform_download' do arquivo 'worker.py'
-    job = q.enqueue('worker.perform_download', url, fmt, quality, job_timeout=3600) # Timeout de 1 hora para o job
+    job_id = secrets.token_hex(8)
+    jobs[job_id] = {'status': 'queued'}
 
-    return jsonify({
-        "status": "processing",
-        "job_id": job.get_id()
-    })
+    # Cria e inicia a thread para o download
+    thread = threading.Thread(target=perform_download_threaded, args=(url, fmt, quality, job_id))
+    thread.start()
+
+    return jsonify({"status": "processing", "job_id": job_id})
 
 @app.route("/status/<job_id>")
 def job_status(job_id):
-    """Verifica o status de uma tarefa."""
-    job = q.fetch_job(job_id)
-
-    if job:
-        if job.is_finished:
-            # Se o job terminou, precisamos descobrir o nome do arquivo que foi baixado.
-            # Esta é uma parte complexa. Para simplificar, vamos assumir que o download foi bem-sucedido
-            # e que o frontend vai precisar que o usuário digite o nome do arquivo ou vamos listar os arquivos.
-            # Uma solução real exigiria que o worker retornasse o nome do arquivo.
-            # Por agora, vamos apenas confirmar a conclusão.
-            # NOTA: O resultado do job (o nome do arquivo) não está sendo passado aqui,
-            # o que precisaria de uma lógica mais avançada para ser implementado.
-            return jsonify({"status": "finished"})
-        elif job.is_failed:
-            return jsonify({"status": "failed"})
-        else:
-            return jsonify({"status": "processing"})
-    else:
+    job = jobs.get(job_id)
+    if not job:
         return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
 
-# A rota getfile continua a mesma
 @app.route("/getfile", methods=["GET"])
 def getfile():
     filename = request.args.get("file")
     if not filename or ".." in filename or filename.startswith("/"):
         return "Nome de arquivo inválido.", 400
-
+        
     filepath = DOWNLOAD_DIR / filename
     if filepath.is_file():
         return send_file(str(filepath), as_attachment=True)
     return "Arquivo não encontrado.", 404
 
-if __name__ == '__main__':
-    app.run(debug=True)
+# A configuração do gunicorn (no Start Command da Render) cuidará de rodar o app
+# O if __name__ == '__main__': não é usado em produção com gunicorn
