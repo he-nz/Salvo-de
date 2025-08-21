@@ -1,5 +1,4 @@
 Flask
 yt-dlp
 gunicorn
-redis
-rq
+
