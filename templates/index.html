@@ -56,6 +56,59 @@
         document.getElementById("status").innerText = "Erro de conexão.";
       }
     }
+  <script>
+    const statusDiv = document.getElementById("status");
+    const linkDiv = document.getElementById("link");
+
+    document.getElementById("downloadForm").onsubmit = async function(e){
+      e.preventDefault();
+      const formData = new FormData(this);
+      
+      statusDiv.innerText = "Enviando para a fila...";
+      linkDiv.innerHTML = "";
+
+      try {
+        const resp = await fetch("/download", { method:"POST", body:formData });
+        const result = await resp.json();
+
+        if(result.status === "processing" && result.job_id){
+          statusDiv.innerText = "Seu download começou! Aguarde...";
+          checkJobStatus(result.job_id);
+        } else {
+          statusDiv.innerText = "Erro: " + result.message;
+        }
+      } catch (err) {
+        statusDiv.innerText = "Erro de conexão ao iniciar o download.";
+      }
+    }
+
+    function checkJobStatus(jobId) {
+      const interval = setInterval(async () => {
+        try {
+          const resp = await fetch(`/status/${jobId}`);
+          const result = await resp.json();
+
+          if (result.status === "finished") {
+            clearInterval(interval);
+            statusDiv.innerText = "Download concluído!";
+            linkDiv.innerHTML = `<a href="/getfile?file=${encodeURIComponent(result.filename)}" target="_blank" rel="noopener noreferrer">Clique aqui para baixar: ${result.filename}</a>`;
+          } else if (result.status === "failed") {
+            clearInterval(interval);
+            statusDiv.innerText = `Erro no download. Tente novamente.`;
+            console.error(result.error);
+          } else if (result.status === "not_found") {
+             clearInterval(interval);
+             statusDiv.innerText = "Tarefa não encontrada.";
+          }
+          // Se for 'processing' ou 'queued', continua esperando...
+          
+        } catch (err) {
+          clearInterval(interval);
+          statusDiv.innerText = "Erro de conexão ao verificar o status.";
+        }
+      }, 5000); // Verifica a cada 5 segundos
+    }
   </script>
 </body>
 </html>
+
